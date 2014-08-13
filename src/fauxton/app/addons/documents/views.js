@@ -26,13 +26,22 @@ define([
        // Plugins
        "plugins/beautify",
        "plugins/prettify",
-       // this should be never global available:
+       // this should never be global available:
        // https://github.com/zeroclipboard/zeroclipboard/blob/master/docs/security.md
        "plugins/zeroclipboard/ZeroClipboard"
 ],
 
 function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
          resizeColumns, beautify, prettify, ZeroClipboard) {
+
+  function showError (msg) {
+    FauxtonAPI.addNotification({
+      msg: msg,
+      type: 'error',
+      clear:  true
+    });
+  }
+
   var Views = {};
 
   Views.SearchBox = FauxtonAPI.View.extend({
@@ -111,8 +120,9 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       this.database.destroy().then(function () {
         FauxtonAPI.navigate('#/_all_dbs');
         FauxtonAPI.addNotification({
-          msg: 'The database <code>' + databaseName + '</code> has been deleted.',
-          clear: true
+          msg: 'The database <code>' + _.escape(databaseName) + '</code> has been deleted.',
+          clear: true,
+          escape: false // beware of possible XSS when the message changes
         });
       }).fail(function (rsp, error, msg) {
         FauxtonAPI.addNotification({
@@ -237,41 +247,14 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     }
   });
 
-  Views.FieldEditorTabs = FauxtonAPI.View.extend({
-    template: "addons/documents/templates/doc_field_editor_tabs",
-    disableLoader: true,
-    initialize: function(options) {
-      this.selected = options.selected;
-    },
-
-    events: {
-    },
-    updateSelected: function (selected) {
-      this.selected = selected;
-      this.$('.active').removeClass('active');
-      this.$('#'+this.selected).addClass('active');
-    },
-
-    serialize: function() {
-      var selected = this.selected;
-      return {
-        doc: this.model,
-        isNewDoc: this.model.isNewDoc(),
-        isSelectedClass: function(item) {
-          return item && item === selected ? "active" : "";
-        }
-      };
-    },
-
-    establish: function() {
-      return [this.model.fetch()];
-    }
-  });
-
   Views.Document = FauxtonAPI.View.extend({
     template: "addons/documents/templates/all_docs_item",
     tagName: "tr",
     className: "all-docs-item",
+
+    initialize: function (options) {
+      this.checked = options.checked;
+    },
 
     events: {
       "click button.delete": "destroy",
@@ -286,7 +269,8 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
 
     serialize: function() {
       return {
-        doc: this.model
+        doc: this.model,
+        checked: this.checked
       };
     },
 
@@ -309,7 +293,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
 
       this.model.destroy().then(function(resp) {
         FauxtonAPI.addNotification({
-          msg: "Succesfully destroyed your doc",
+          msg: "Succesfully deleted your doc",
           clear:  true
         });
         that.$el.fadeOut(function () {
@@ -322,7 +306,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
         }
       }, function(resp) {
         FauxtonAPI.addNotification({
-          msg: "Failed to destroy your doc!",
+          msg: "Failed to deleted your doc!",
           type: "error",
           clear:  true
         });
@@ -392,7 +376,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       this.newView = options.newView || false;
       this.pagination = options.pagination;
       _.bindAll(this);
-      
+
       this._perPage = options.perPageDefault || 20;
       this.listenTo(this.collection, 'totalRows:decrement', this.render);
     },
@@ -529,29 +513,16 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     template: "addons/documents/templates/all_docs_list",
     events: {
       "click button.all": "selectAll",
-      "click button.bulk-delete": "bulkDelete",
+      "click button.js-bulk-delete": "bulkDelete",
       "click #collapse": "collapse",
-      "change .row-select":"toggleTrash",
+      "click .all-docs-item": "toggleDocument",
       "click #js-end-results": "scrollToQuery"
     },
 
-    toggleTrash: function () {
-      if (this.$('.row-select:checked').length > 0) {
-        this.$('.bulk-delete').removeClass('disabled');
-      } else {
-        this.$('.bulk-delete').addClass('disabled');
-      }
-    },
-
-    scrollToQuery: function () {
-      $('#dashboard-content').animate({ scrollTop: 0 }, 'slow');
-    },
-
-    initialize: function(options){
+    initialize: function (options) {
       this.nestedView = options.nestedView || Views.Document;
       this.rows = {};
-      this.viewList = !! options.viewList;
-      this.database = options.database;
+      this.viewList = !!options.viewList;
 
       if (options.ddocInfo) {
         this.designDocs = options.ddocInfo.designDocs;
@@ -562,6 +533,74 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       this.params = options.params || {};
       this.expandDocs = true;
       this.perPageDefault = this.docParams.limit || 20;
+
+      // some doclists don't have an option to delete
+      if (!this.viewList) {
+        this.bulkDeleteDocsCollection = options.bulkDeleteDocsCollection;
+      }
+    },
+
+    removeDocuments: function (ids) {
+      _.each(ids, function (id) {
+        this.removeDocument(id);
+      }, this);
+
+      this.pagination.updatePerPage(parseInt(this.$('#select-per-page :selected').val(), 10));
+      FauxtonAPI.triggerRouteEvent('perPageChange', this.pagination.documentsLeftToFetch());
+    },
+
+    removeDocument: function (id) {
+      var that = this;
+
+      if (!this.rows[id]) {
+        return;
+      }
+
+      this.rows[id].$el.fadeOut('slow', function () {
+        that.rows[id].remove();
+      });
+    },
+
+    showError: function (ids) {
+      if (ids) {
+        showError('Failed to delete: ' + ids.join(', '));
+        return;
+      }
+
+      showError('Failed to delete your doc!');
+    },
+
+    toggleDocument: function (event) {
+      var $row = this.$(event.target).closest('tr'),
+          docId = $row.attr('data-id'),
+          db = this.database.get('id'),
+          rev = this.collection.get(docId).get('_rev'),
+          data = {_id: docId, _rev: rev, _deleted: true};
+
+      if (!$row.hasClass('js-to-delete')) {
+        this.bulkDeleteDocsCollection.add(data);
+      } else {
+        this.bulkDeleteDocsCollection.remove(this.bulkDeleteDocsCollection.get(docId));
+      }
+
+      $row.find('.js-row-select').prop('checked', !$row.hasClass('js-to-delete'));
+      $row.toggleClass('js-to-delete');
+
+      this.toggleTrash();
+    },
+
+    toggleTrash: function () {
+      var $bulkdDeleteButton = this.$('.js-bulk-delete');
+
+      if (this.bulkDeleteDocsCollection && this.bulkDeleteDocsCollection.length > 0) {
+        $bulkdDeleteButton.removeClass('disabled');
+      } else {
+        $bulkdDeleteButton.addClass('disabled');
+      }
+    },
+
+    scrollToQuery: function () {
+      $('#dashboard-content').animate({ scrollTop: 0 }, 'slow');
     },
 
     establish: function() {
@@ -581,7 +620,6 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
 
           //now redirect back to alldocs
           FauxtonAPI.navigate(model.database.url("index") + "?limit=100");
-          console.log("ERROR: ", arguments);
         }
       });
     },
@@ -610,48 +648,17 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       this.render();
     },
 
-    /*
-     * TODO: this should be reconsidered
-     * This currently performs delete operations on the model level,
-     * when we could be using bulk docs with _deleted = true. Using
-     * individual models is cleaner from a backbone standpoint, but
-     * not from the couchdb api.
-     * Also, the delete method is naive and leaves the body intact,
-     * when we should switch the doc to only having id/rev/deleted.
-     */
     bulkDelete: function() {
-      var that = this;
-      // yuck, data binding ftw?
-      var eles = this.$el.find("input.row-select:checked")
-                         .parents("tr.all-docs-item")
-                         .map(function(e) { return $(this).attr("data-id"); })
-                         .get();
+      var that = this,
+          documentsLength = this.bulkDeleteDocsCollection.length,
+          msg;
 
-      if (eles.length === 0 || !window.confirm("Are you sure you want to delete these " + eles.length + " docs?")) {
+      msg = "Are you sure you want to delete these " + documentsLength + " docs?";
+      if (documentsLength === 0 || !window.confirm(msg)) {
         return false;
       }
 
-      _.each(eles, function(ele) {
-        var model = this.collection.get(ele);
-
-        model.destroy().then(function(resp) {
-          that.rows[ele].$el.fadeOut(function () {
-            $(this).remove();
-          });
-
-          model.collection.remove(model.id);
-          if (!!model.id.match('_design')) {
-            FauxtonAPI.triggerRouteEvent('reloadDesignDocs');
-          }
-          that.$('.bulk-delete').addClass('disabled');
-        }, function(resp) {
-          FauxtonAPI.addNotification({
-            msg: "Failed to destroy your doc!",
-            type: "error",
-            clear:  true
-          });
-        });
-      }, this);
+      this.bulkDeleteDocsCollection.bulkDelete();
     },
 
     addPagination: function () {
@@ -670,6 +677,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     },
 
     beforeRender: function() {
+      var docs;
 
       if (!this.pagination) {
         this.addPagination();
@@ -688,11 +696,16 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
 
       this.setView('#item-numbers', this.allDocsNumber);
 
-      var docs = this.expandDocs ? this.collection : this.collection.simple();
+      docs = this.expandDocs ? this.collection : this.collection.simple();
 
       docs.each(function(doc) {
+        var isChecked;
+        if (this.bulkDeleteDocsCollection) {
+          isChecked = this.bulkDeleteDocsCollection.get(doc.id);
+        }
         this.rows[doc.id] = this.insertView("table.all-docs tbody", new this.nestedView({
-          model: doc
+          model: doc,
+          checked: isChecked
         }));
       }, this);
     },
@@ -713,8 +726,17 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       }
     },
 
-    afterRender: function(){
+    afterRender: function () {
       prettyPrint();
+
+      if (this.bulkDeleteDocsCollection) {
+        this.stopListening(this.bulkDeleteDocsCollection);
+        this.listenTo(this.bulkDeleteDocsCollection, 'error', this.showError);
+        this.listenTo(this.bulkDeleteDocsCollection, 'removed', this.removeDocuments);
+        this.listenTo(this.bulkDeleteDocsCollection, 'updated', this.toggleTrash);
+      }
+
+      this.toggleTrash();
     },
 
     perPage: function () {
@@ -722,8 +744,8 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     }
   });
 
-  Views.Doc = FauxtonAPI.View.extend({
-    template: "addons/documents/templates/doc",
+  Views.CodeEditor = FauxtonAPI.View.extend({
+    template: "addons/documents/templates/code_editor",
     events: {
       "click button.save-doc": "saveDoc",
       "click button.delete": "destroy",
@@ -731,14 +753,18 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       "click button.upload": "upload",
       "click button.cancel-button": "goback"
     },
+
     disableLoader: true,
+
     initialize: function (options) {
       this.database = options.database;
       _.bindAll(this);
     },
+
     goback: function(){
       FauxtonAPI.navigate(this.database.url("index") + "?limit=100");
     },
+
     destroy: function(event) {
       if (this.model.isNewDoc()) {
         FauxtonAPI.addNotification({
@@ -757,13 +783,13 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
 
       this.model.destroy().then(function(resp) {
         FauxtonAPI.addNotification({
-          msg: "Succesfully destroyed your doc",
+          msg: "Succesfully deleted your doc",
           clear:  true
         });
         FauxtonAPI.navigate(database.url("index"));
       }, function(resp) {
         FauxtonAPI.addNotification({
-          msg: "Failed to destroy your doc!",
+          msg: "Failed to delete your doc!",
           type: "error",
           clear:  true
         });
@@ -805,9 +831,8 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     },
 
     updateValues: function() {
-      var notification;
       if (this.model.changedAttributes()) {
-        notification = FauxtonAPI.addNotification({
+        FauxtonAPI.addNotification({
           msg: "Document saved successfully.",
           type: "success",
           clear: true
@@ -840,7 +865,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     },
 
     saveDoc: function(event) {
-      var json, notification,
+      var json,
       that = this,
       editor = this.editor,
       validDoc = this.getDocFromEditor();
@@ -848,15 +873,14 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       if (validDoc) {
         this.getDocFromEditor();
 
-        notification = FauxtonAPI.addNotification({msg: "Saving document."});
+        FauxtonAPI.addNotification({msg: "Saving document."});
 
         this.model.save().then(function () {
           editor.editSaved();
           FauxtonAPI.navigate('/database/' + that.database.safeID() + '/' + that.model.id);
         }).fail(function(xhr) {
-
           var responseText = JSON.parse(xhr.responseText).reason;
-          notification = FauxtonAPI.addNotification({
+          FauxtonAPI.addNotification({
             msg: "Save failed: " + responseText,
             type: "error",
             fade: false,
@@ -865,7 +889,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
           });
         });
       } else if(this.model.validationError && this.model.validationError === 'Cannot change a documents id.') {
-          notification = FauxtonAPI.addNotification({
+          FauxtonAPI.addNotification({
             msg: "Cannot save: " + 'Cannot change a documents _id, try Duplicate doc instead!',
             type: "error",
             selector: "#doc .errors-container",
@@ -873,7 +897,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
           });
         delete this.model.validationError;
       } else {
-        notification = FauxtonAPI.addNotification({
+        FauxtonAPI.addNotification({
           msg: "Please fix the JSON errors and try again.",
           type: "error",
           selector: "#doc .errors-container",
@@ -883,6 +907,8 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     },
 
     getDocFromEditor: function () {
+      var json;
+
       if (!this.hasValidCode()) {
         return false;
       }
@@ -925,7 +951,9 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     },
 
     afterRender: function() {
-      var saveDoc = this.saveDoc;
+      var saveDoc = this.saveDoc,
+          editor,
+          model;
 
       this.editor = new Components.Editor({
         editorId: "editor-container",
@@ -940,12 +968,12 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
         }]
       });
       this.editor.render();
-      this.model.on("sync", this.updateValues, this);
 
-      var editor = this.editor,
-          model = this.model;
+      editor = this.editor;
+      model = this.model;
 
-      editor.editor.on("change", function (event) {
+      this.listenTo(this.model, "sync", this.updateValues);
+      this.listenTo(editor.editor, "change", function (event) {
         var changedDoc;
         try {
           changedDoc = JSON.parse(editor.getValue());
@@ -978,54 +1006,6 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     }
   });
 
-  Views.DocFieldEditor = FauxtonAPI.View.extend({
-    template: "addons/documents/templates/doc_field_editor",
-    disableLoader: true,
-    events: {
-      "click button.save": "saveDoc"
-    },
-
-    saveDoc: function(event) {
-      FauxtonAPI.addNotification({
-        type: "warning",
-        msg: "Save functionality coming soon.",
-        clear:  true
-      });
-    },
-
-    serialize: function() {
-      return {
-        doc: this.getModelWithoutAttachments(),
-        attachments: this.getAttachments()
-      };
-    },
-
-    getModelWithoutAttachments: function() {
-      var model = this.model.toJSON();
-      delete model._attachments;
-      return model;
-    },
-
-    getAttachments: function () {
-      var attachments = this.model.get('_attachments');
-
-      if (!attachments) { return []; }
-
-      return _.map(attachments, function (att, key) {
-        return {
-          fileName: key,
-          size: att.length,
-          contentType: att.content_type,
-          url: this.model.url() + '/' + key
-        };
-      }, this);
-    },
-
-    establish: function() {
-      return [this.model.fetch()];
-    }
-  });
-
   Views.AdvancedOptions = FauxtonAPI.View.extend({
     template: "addons/documents/templates/advanced_options",
     className: "advanced-options well",
@@ -1036,39 +1016,34 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       this.viewName = options.viewName;
       this.updateViewFn = options.updateViewFn;
       this.previewFn = options.previewFn;
-
-      if (typeof(options.hasReduce) === 'undefined') {
-        this.hasReduce = true;
-      } else {
-        this.hasReduce = options.hasReduce;
-      }
-
-      if (typeof(options.showPreview) === 'undefined') {
-        this.showPreview = true;
-      } else {
-        this.showPreview = options.showPreview;
-      }
+      this.showStale = _.isUndefined(options.showStale) ? false : options.showStale;
+      this.hasReduce = _.isUndefined(options.hasReduce) ? true : options.hasReduce;
     },
 
     events: {
       "change form.js-view-query-update input": "updateFilters",
       "change form.js-view-query-update select": "updateFilters",
       "submit form.js-view-query-update": "updateView",
-      "click button.preview": "previewView",
       "click .toggle-btns > label":  "toggleQuery"
     },
 
     toggleQuery: function(e){
       e.preventDefault();
-      var showFunctionName =this.$(e.currentTarget).attr("for");
-      //highlight current
-      this.$(".toggle-btns > label").removeClass('active');
-      this.$(e.currentTarget).addClass("active");
-      
-      this.$("[id^='js-show']").hide();
 
-      //show section & disable what needs to be disabled
-      this[showFunctionName]();
+      if (this.$(e.currentTarget).hasClass("active")){
+        this.$('.js-query-keys-wrapper').addClass("hide");
+        this.$(".toggle-btns > label").removeClass('active');
+        this.$('.js-query-keys-wrapper').find("input,textarea").attr("disabled","true");
+      } else {
+        this.$('.js-query-keys-wrapper').removeClass("hide");
+        var showFunctionName =this.$(e.currentTarget).attr("for");
+        //highlight current
+        this.$(".toggle-btns > label").removeClass('active');
+        this.$(e.currentTarget).addClass("active");
+        this.$("[id^='js-show']").hide();
+        //show section & disable what needs to be disabled
+        this[showFunctionName]();
+      }
     },
 
     showKeys: function(){
@@ -1114,7 +1089,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       if (_.isUndefined(parsedValue)) {
         errorMsg = "Keys must be valid json.";
       } else if (!_.isArray(parsedValue)) {
-        errorMsg =  "Keys values must be in an array. E.g [1,2,3]"; 
+        errorMsg =  "Keys values must be in an array. E.g [1,2,3]";
       }
 
       if (errorMsg) {
@@ -1123,12 +1098,30 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
           type: "error",
           msg: errorMsg,
           clear:  false,
-          selector: '.js-keys-error'
+          selector: '.advanced-options .errors-container'
         });
         return false;
       }
 
-      return true; 
+      return true;
+    },
+    validateFields: function(params){
+      var errors = false;
+      //so ghetto. Spaghetti code.
+      for (var i= 0; i <params.length; i++){
+        if (params[i].name === "skip"){
+          if (!(/^\d+$/).test(params[i].value)){
+            FauxtonAPI.addNotification({
+              msg: "Numbers only for skip",
+              type: "warn",
+              selector: ".advanced-options .errors-container",
+              clear:  true
+            });
+            errors = true;
+          }
+        }
+      }
+      return errors;
     },
     queryParams: function () {
       var $form = this.$(".js-view-query-update"),
@@ -1145,6 +1138,8 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
 
       if (keysParam && !this.validateKeys(keysParam)) { return false; }
 
+      if (params && this.validateFields(params)){ return false; }
+
       // Validate *key* params to ensure they're valid JSON
       var keyParams = ["keys","startkey","endkey"];
       var errorParams = _.filter(params, function(param) {
@@ -1156,6 +1151,13 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       }, this);
 
       return {params: params, errorParams: errorParams};
+    },
+
+    updateView: function (event) {
+      event.preventDefault();
+      var params = this.queryParams();
+      if (!params) { return;}
+      this.updateViewFn(event, params);
     },
 
     updateFilters: function(event) {
@@ -1178,16 +1180,26 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
             var notification = FauxtonAPI.addNotification({
               msg: "include_docs has been disabled as you cannot include docs on a reduced view",
               type: "warn",
-              selector: ".view.show .all-docs-list.errors-container",
+              selector: ".advanced-options .errors-container",
               clear:  true
             });
           }
           $form.find("input[name=include_docs]").prop("disabled", true);
           $form.find("select[name=group_level]").prop("disabled", false);
         } else {
-          $form.find("select[name=group_level]").prop("disabled", true);
+          $form.find("select[name=group_level]").val("999").prop("disabled", true);
           $form.find("input[name=include_docs]").prop("disabled", false);
         }
+        break;
+        case "skip":
+          if (!(/^\d+$/).test($ele.val())){
+            FauxtonAPI.addNotification({
+              msg: "Numbers only for skip",
+              type: "warn",
+              selector: ".advanced-options .errors-container",
+              clear:  true
+            });
+          }
         break;
         case "include_docs":
         break;
@@ -1217,8 +1229,8 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
           }
           this.updateFiltersFor(key, $ele);
           break;
-          case "key": 
-          case "keys": 
+          case "key":
+          case "keys":
             $form.find("textarea[name='"+key+"']").val(val);
           break;
           default:
@@ -1228,23 +1240,11 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       }, this);
     },
 
-    updateView: function (event) {
-      event.preventDefault();
-      var params = this.queryParams();
-      if (!params) { return;}
-      this.updateViewFn(event, params);
-    },
-
-    previewView: function (event) {
-      var params = this.queryParams();
-      if (!params) { return;}
-      this.previewFn(event, params);
-    },
-
     serialize: function () {
       return {
         hasReduce: this.hasReduce,
-        showPreview: this.showPreview
+        showPreview: false,
+        showStale: this.showStale
       };
     }
   });
@@ -1549,13 +1549,12 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
         return params;
       }, {reduce: false});
 
-      event.preventDefault();
-
       FauxtonAPI.addNotification({
         msg: "<strong>Warning!</strong> Preview executes the Map/Reduce functions in your browser, and may behave differently from CouchDB.",
         type: "warning",
         selector: ".advanced-options .errors-container",
-        fade: true
+        fade: true,
+        escape: false // beware of possible XSS when the message changes
       });
 
       var promise = FauxtonAPI.Deferred();
@@ -1619,7 +1618,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
 
     toggleIndexNav: function (event) {
       $('#dashboard-content').scrollTop(0); //scroll up
-      
+
       var $targetId = this.$(event.target).attr('id'),
           $previousTab = this.$(this.$('li.active a').attr('href')),
           $targetTab = this.$(this.$(event.target).attr('href'));
@@ -1628,7 +1627,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
         $previousTab.removeAttr('style');
       }
       //stop polling
-      this.ddocInfoView.stopRefreshInterval(); 
+      this.ddocInfoView.stopRefreshInterval();
 
       if ($targetId === 'index-nav') {
         if (this.newView) { return; }
@@ -1640,8 +1639,8 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
       } else if ($targetId === "meta-nav"){
         if (!$("#ddoc-info").is(":visible")){
           this.ddocInfoView.startRefreshInterval();
-        } 
-        $targetTab.toggle('slow'); 
+        }
+        $targetTab.toggle('slow');
       } else {
         $targetTab.toggle('slow');
       }
@@ -1688,7 +1687,7 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
     renderDdocInfo: function(){
       if(this.ddocInfoView){
         this.ddocInfoView.remove();
-      } 
+      }
 
       if (this.newView) { return; }
       this.ddocInfoView = this.setView('#ddoc-info', new Views.DdocInfo({model: this.ddocInfo }));
@@ -1711,8 +1710,19 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
         this.reduceFunStr = this.model.viewHasReduce(this.viewName);
       }
 
+      var viewFilters = FauxtonAPI.getExtensions('sidebar:viewFilters'),
+          filteredModels = this.ddocs.models,
+          designDocs = this.ddocs.clone();
+
+      if (!_.isEmpty(viewFilters)) {
+        _.each(viewFilters, function (filter) {
+          filteredModels = _.filter(filteredModels, filter);
+        });
+        designDocs.reset(filteredModels, {silent: true});
+      }
+
       this.designDocSelector = this.setView('.design-doc-group', new Views.DesignDocSelector({
-        collection: this.ddocs,
+        collection: designDocs,
         ddocName: this.model.id,
         database: this.database
       }));
@@ -1727,7 +1737,8 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
           viewName: this.viewName,
           ddocName: this.model.id,
           hasReduce: this.hasReduce(),
-          eventer: this.eventer
+          eventer: this.eventer,
+          showStale: true
         }));
       }
 
@@ -1874,7 +1885,16 @@ function(app, FauxtonAPI, Components, Documents, Databases, pouchdb,
         extension.render();
       }, this);
 
-      this.collection.each(function(design) {
+      var viewFilters = FauxtonAPI.getExtensions('sidebar:viewFilters'),
+          collection = this.collection.models;
+
+      if (!_.isEmpty(viewFilters)) {
+        _.each(viewFilters, function (filter) {
+          collection = _.filter(collection, filter);
+        });
+      }
+
+      _.each(collection, function(design) {
         if (design.has('doc')){
           var ddoc = design.id.replace(/^_design\//,"");
           if (design.get('doc').views){

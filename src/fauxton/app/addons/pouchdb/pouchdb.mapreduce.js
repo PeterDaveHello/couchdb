@@ -29,12 +29,16 @@ define([
   "api",
 
   // Modules
-  "addons/pouchdb/pouch.collate.js"
+  "addons/pouchdb/pouch.collate"
 ],
 
 function(app, FauxtonAPI, Collate) {
   var Pouch = {};
   Pouch.collate = Collate.collate;
+
+  function sum(values) {
+    return values.reduce(function(a, b) { return a + b; }, 0);
+  }
 
   //var MapReduce = function(db) {
   var MapReduce = function() {
@@ -59,7 +63,7 @@ function(app, FauxtonAPI, Collate) {
           'max': Math.max.apply(null, values),
           'count': values.length,
           'sumsqr': (function(){
-            _sumsqr = 0;
+            var _sumsqr = 0;
             for(var idx in values){
               _sumsqr += values[idx] * values[idx];
             }
@@ -75,10 +79,6 @@ function(app, FauxtonAPI, Collate) {
         return;
       }
 
-      function sum(values) {
-        return values.reduce(function(a, b) { return a + b; }, 0);
-      }
-
       var results = [];
       var current = null;
       var num_started= 0;
@@ -90,7 +90,7 @@ function(app, FauxtonAPI, Collate) {
           id: current.doc._id,
           key: key,
           value: val
-        }; 
+        };
         //console.log("VIEW ROW: ", viewRow);
 
         if (options.startkey && Pouch.collate(key, options.startkey) < 0) return;

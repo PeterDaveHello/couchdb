@@ -19,33 +19,37 @@ module.exports = function (grunt) {
         http = require("http"),
         httpProxy = require('http-proxy'),
         send = require('send'),
+        urlLib = require('url'),
         options = grunt.config('couchserver'),
         _ = grunt.util._;
 
     // Options
     var dist_dir = options.dist || './dist/debug/',
         app_dir = './app',
-        port = options.port || 8000;
+        port = options.port || 8000,
+        setContentSecurityPolicy = _.isUndefined(options.contentSecurityPolicy) ? true : options.contentSecurityPolicy;
 
     // Proxy options with default localhost
     var proxy_settings = options.proxy || {
-      target: {
-        host: 'localhost',
-        port: 5984,
-        https: false
-      }
+      target: "http://localhost:5984/"
     };
 
     // inform grunt that this task is async
     var done = this.async();
 
     // create proxy to couch for all couch requests
-    var proxy = new httpProxy.HttpProxy(proxy_settings);
+    var proxy = httpProxy.createServer(proxy_settings);
 
     http.createServer(function (req, res) {
       var url = req.url.replace('app/',''),
           accept = req.headers.accept.split(','),
           filePath;
+
+      if (setContentSecurityPolicy) {
+        var headerValue = "default-src 'self'; img-src 'self'; font-src 'self'; " +
+                          "script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline';";
+        res.setHeader('Content-Security-Policy', headerValue);
+      }
 
       if (!!url.match(/^\/addons\/.*\/assets\/js/)) {
         filePath = path.join(app_dir, url.replace('/_utils/fauxton/',''));
@@ -56,6 +60,7 @@ module.exports = function (grunt) {
       } else if (!!url.match(/mocha|\/test\/core\/|test\.config/)) {
         filePath = path.join('./test', url.replace('/test/',''));
       } else if (!!url.match(/\.css|img/)) {
+        url = url.replace(/\?.*/, '');
         filePath = path.join(dist_dir,url);
       /*} else if (!!url.match(/\/js\//)) {
         // serve any javascript or files from dist debug dir
@@ -87,9 +92,14 @@ module.exports = function (grunt) {
             res.end(JSON.stringify({error: err.message}));
           })
           .pipe(res);
-      } 
+      }
 
-      proxy.proxyRequest(req, res);
+      // This sets the Host header in the proxy so that one can use external
+      // CouchDB instances and not have the Host set to 'localhost'
+      var urlObj = urlLib.parse(req.url);
+      req.headers['host'] = urlObj.host;
+
+      proxy.web(req, res);
     }).listen(port);
 
     // Fail this task if any errors have been logged

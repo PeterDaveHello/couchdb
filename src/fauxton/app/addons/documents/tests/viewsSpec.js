@@ -9,20 +9,15 @@
 // WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 // License for the specific language governing permissions and limitations under
 // the License.
-
 define([
-  "app",
+        'addons/documents/views',
+        'testUtils'
+], function (Views, testUtils) {
+  var assert = testUtils.assert;
 
-  "api",
-
-  // Modules
-  "addons/logs/routes"
-],
-
-function(app, FauxtonAPI, Log) {
-  Log.initialize = function() {
-    FauxtonAPI.addHeaderLink({title: "Log", href: "#_log", icon: "fonticon-log", className: 'logs'});
-  };
-
-  return Log;
+  describe('DocumentsViews', function () {
+    it('should load', function () {
+      assert.equal(typeof Views.Views.Changes, 'function');
+    });
+  });
 });

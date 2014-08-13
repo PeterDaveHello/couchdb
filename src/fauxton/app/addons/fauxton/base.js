@@ -23,7 +23,8 @@ function(app, FauxtonAPI, resizeColumns) {
     options = _.extend({
       msg: "Notification Event Triggered!",
       type: "info",
-      selector: "#global-notifications"
+      selector: "#global-notifications",
+      escape: true
     }, options);
 
     var view = new Fauxton.Notification(options);
@@ -46,17 +47,15 @@ function(app, FauxtonAPI, resizeColumns) {
   });
 
   Fauxton.initialize = function () {
-    app.footer = new Fauxton.Footer({el: "#footer-content"}),
+    // app.footer = new Fauxton.Footer({el: "#footer-content"}),
     app.navBar = new Fauxton.NavBar();
     app.apiBar = new Fauxton.ApiBar();
 
-    FauxtonAPI.when.apply(null, app.footer.establish()).done(function() {
+    FauxtonAPI.when.apply(null, app.navBar.establish()).done(function() {
       FauxtonAPI.masterLayout.setView("#primary-navbar", app.navBar, true);
       FauxtonAPI.masterLayout.setView("#api-navbar", app.apiBar, true);
       app.navBar.render();
       app.apiBar.render();
-
-      app.footer.render();
     });
 
     FauxtonAPI.masterLayout.navBar = app.navBar;
@@ -114,6 +113,7 @@ function(app, FauxtonAPI, resizeColumns) {
   });
 
   Fauxton.Footer = FauxtonAPI.View.extend({
+    tagName: "p",
     template: "addons/fauxton/templates/footer",
 
     initialize: function() {
@@ -134,6 +134,17 @@ function(app, FauxtonAPI, resizeColumns) {
   Fauxton.NavBar = FauxtonAPI.View.extend({
     className:"navbar",
     template: "addons/fauxton/templates/nav_bar",
+
+    events:  {
+      "click .burger" : "toggleMenu"
+    },
+
+    toggleMenu: function(){
+       var $selectorList = $('body');
+       $selectorList.toggleClass('closeMenu');
+       this.resizeColumns.onResizeHandler();
+    },
+
     // TODO: can we generate this list from the router?
     navLinks: [
       {href:"#/_all_dbs", title:"Databases", icon: "fonticon-database", className: 'databases'}
@@ -147,9 +158,10 @@ function(app, FauxtonAPI, resizeColumns) {
       //resizeAnimation
       app.resizeColumns = this.resizeColumns = new resizeColumns({});
       this.resizeColumns.onResizeHandler();
-      
+
       FauxtonAPI.extensions.on('add:navbar:addHeaderLink', this.addLink);
       FauxtonAPI.extensions.on('removeItem:navbar:addHeaderLink', this.removeLink);
+      this.versionFooter = new Fauxton.Footer({});
     },
 
     serialize: function() {
@@ -158,6 +170,10 @@ function(app, FauxtonAPI, resizeColumns) {
         bottomNavLinks: this.bottomNavLinks,
         footerNavLinks: this.footerNavLinks
       };
+    },
+
+    establish: function(){
+      return [this.versionFooter.establish()];
     },
 
     addLink: function(link) {
@@ -202,23 +218,7 @@ function(app, FauxtonAPI, resizeColumns) {
     afterRender: function(){
       $('#primary-navbar li[data-nav-name="' + app.selectedHeader + '"]').addClass('active');
 
-      var menuOpen = true;
       var $selectorList = $('body');
-      $('.brand').off();
-      $('.brand').on({
-        click: function(e){
-          if(!$(e.target).is('a')){
-            toggleMenu();
-          }
-        }
-      });
-
-      function toggleMenu(){
-        $selectorList.toggleClass('closeMenu');
-        menuOpen = $selectorList.hasClass('closeMenu');
-        this.resizeColumns.onResizeHandler();
-      }
-      
       var that = this;
       $('#primary-navbar').on("click", ".nav a", function(){
         if (!($selectorList.hasClass('closeMenu'))){
@@ -235,6 +235,7 @@ function(app, FauxtonAPI, resizeColumns) {
     },
 
     beforeRender: function () {
+      this.insertView(".version", this.versionFooter);
       this.addLinkViews();
     },
 
@@ -304,7 +305,11 @@ function(app, FauxtonAPI, resizeColumns) {
     fadeTimer: 5000,
 
     initialize: function(options) {
-      this.msg = options.msg;
+      this.htmlToRender = options.msg;
+      // escape always, except the value is false
+      if (options.escape !== false) {
+        this.htmlToRender = _.escape(this.htmlToRender);
+      }
       this.type = options.type || "info";
       this.selector = options.selector;
       this.fade = options.fade === undefined ? true : options.fade;
@@ -316,7 +321,7 @@ function(app, FauxtonAPI, resizeColumns) {
     serialize: function() {
       return {
         data: this.data,
-        msg: this.msg,
+        htmlToRender: this.htmlToRender,
         type: this.type
       };
     },

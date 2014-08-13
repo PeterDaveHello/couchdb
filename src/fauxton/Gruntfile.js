@@ -124,14 +124,7 @@ module.exports = function(grunt) {
       dist: './dist/debug/',
       port: 8000,
       proxy: {
-        target: {
-          host: 'localhost',
-          port: 5984,
-          https: false
-        },
-        // This sets the Host header in the proxy so that you can use external
-        // CouchDB instances and not have the Host set to 'localhost'
-        changeOrigin: true
+        target: "http://localhost:5984/"
       }
     };
 
@@ -164,7 +157,39 @@ module.exports = function(grunt) {
       options: {
         scripturl: true,
         evil: true,
-        expr: true
+        expr: true,
+        undef: true,
+        globals: {
+          document: true,
+          window: true,
+          location: true,
+          alert: true,
+          console: true,
+          clearInterval: true,
+          setInterval: true,
+          setTimeout: true,
+          prompt: true,
+          confirm: true,
+
+          jQuery: true,
+          Backbone: true,
+          $: true,
+          _: true,
+          require: true,
+          module: true,
+          sinon: true,
+          it: true,
+          describe: true,
+          beforeEach: true,
+          afterEach: true,
+          before: true,
+          after: true,
+          define: true,
+
+          Spinner: true,
+          prettyPrint: true
+
+        }
       }
     },
 
@@ -242,7 +267,7 @@ module.exports = function(grunt) {
     couchserver: couchserver_config,
 
     watch: {
-      js: { 
+      js: {
         files: helper.watchFiles(['.js'], ["./app/**/*.js", '!./app/load_addons.js',"./assets/**/*.js", "./test/**/*.js"]),
         tasks: ['watchRun'],
       },

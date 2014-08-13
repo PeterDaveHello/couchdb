@@ -21,13 +21,16 @@ function(app, FauxtonAPI, PagingCollection) {
 
   Documents.QueryParams = (function () {
     var _eachParams = function (params, action) {
+      // clone to avoid in-place modification
+      var result = _.clone(params);
+
       _.each(['startkey', 'endkey', 'key'], function (key) {
-        if (_.has(params, key)) {
-          params[key] = action(params[key]);
+        if (_.has(result, key)) {
+          result[key] = action(result[key]);
         }
       });
 
-      return params;
+      return result;
     };
 
     return {
@@ -41,7 +44,7 @@ function(app, FauxtonAPI, PagingCollection) {
     };
   })();
 
-  
+
   Documents.Doc = FauxtonAPI.Model.extend({
     idAttribute: "_id",
     documentation: function(){
@@ -119,7 +122,7 @@ function(app, FauxtonAPI, PagingCollection) {
 
     setDdocView: function (view, map, reduce) {
       if (!this.isDdoc()) return false;
-      var views = this.get('views');
+      var views = this.get('views'),
           tempView = views[view] || {};
 
       if (reduce) {
@@ -191,15 +194,19 @@ function(app, FauxtonAPI, PagingCollection) {
         if (typeof(this.id) === "undefined") {
           resp._id = resp.id;
         }
+
+        delete resp.id;
       }
+
       if (resp.ok) {
         delete resp.ok;
       }
+
       return resp;
     },
 
     prettyJSON: function() {
-      var data = this.get("doc") ? this.get("doc") : this;
+      var data = this.get("doc") ? this.get("doc") : this.attributes;
 
       return JSON.stringify(data, null, "  ");
     },
@@ -295,6 +302,94 @@ function(app, FauxtonAPI, PagingCollection) {
 
   });
 
+  Documents.BulkDeleteDoc = FauxtonAPI.Model.extend({
+    idAttribute: "_id"
+  });
+
+  Documents.BulkDeleteDocCollection = FauxtonAPI.Collection.extend({
+
+    model: Documents.BulkDeleteDoc,
+
+    sync: function () {
+
+    },
+
+    initialize: function (models, options) {
+      this.databaseId = options.databaseId;
+    },
+
+    bulkDelete: function () {
+      var payload = this.createPayload(this.toJSON()),
+          that = this;
+
+      $.ajax({
+        type: 'POST',
+        url: app.host + '/' + this.databaseId + '/_bulk_docs',
+        contentType: 'application/json',
+        dataType: 'json',
+        data: JSON.stringify(payload),
+      })
+      .then(function (res) {
+        that.handleResponse(res);
+      })
+      .fail(function () {
+        var ids = _.reduce(that.toArray(), function (acc, doc) {
+          acc.push(doc.id);
+          return acc;
+        }, []);
+        that.trigger('error', ids);
+      });
+    },
+
+    handleResponse: function (res) {
+      var ids = _.reduce(res, function (ids, doc) {
+        if (doc.error) {
+          ids.errorIds.push(doc.id);
+        }
+
+        if (doc.ok === true) {
+          ids.successIds.push(doc.id);
+        }
+
+        return ids;
+      }, {errorIds: [], successIds: []});
+
+      this.removeDocuments(ids.successIds);
+
+      if (ids.errorIds.length) {
+        this.trigger('error', ids.errorIds);
+      }
+
+      this.trigger('updated');
+    },
+
+    removeDocuments: function (ids) {
+      var reloadDesignDocs = false;
+      _.each(ids, function (id) {
+        if (/_design/.test(id)) {
+          reloadDesignDocs = true;
+        }
+
+        this.remove(this.get(id));
+      }, this);
+
+      if (reloadDesignDocs) {
+        FauxtonAPI.triggerRouteEvent('reloadDesignDocs');
+      }
+
+      this.trigger('removed', ids);
+    },
+
+    createPayload: function (documents) {
+      var documentList = documents;
+
+      return {
+        docs: documentList
+      };
+    }
+  });
+
+
   Documents.AllDocs = PagingCollection.extend({
     model: Documents.Doc,
     documentation: function(){
@@ -372,11 +467,29 @@ function(app, FauxtonAPI, PagingCollection) {
 
       // remove any query errors that may return without doc info
       // important for when querying keys on all docs
-      resp.rows = _.filter(rows, function(row){
+      var cleanRows = _.filter(rows, function(row){
         return row.value;
       });
 
+      resp.rows = _.map(cleanRows, function(row){
+        return {
+          _id: row.id,
+          _rev: row.value.rev,
+          value: row.value,
+          key: row.key,
+          doc: row.doc || undefined
+        };
+      });
+
       return PagingCollection.prototype.parse.call(this, resp);
+    },
+
+    clone: function () {
+      return new this.constructor(this.models, {
+        database: this.database,
+        params: this.params,
+        paging: this.paging
+      });
     }
   });
 
@@ -401,6 +514,7 @@ function(app, FauxtonAPI, PagingCollection) {
 
     urlRef: function(context, params) {
       var query = "";
+      
       if (params) {
         if (!_.isEmpty(params)) {
           query = "?" + $.param(params);
@@ -408,7 +522,8 @@ function(app, FauxtonAPI, PagingCollection) {
           query = '';
         }
       } else if (this.params) {
-        query = "?" + $.param(this.params);
+        var parsedParam = Documents.QueryParams.stringify(this.params);
+        query = "?" + $.param(parsedParam);
       }
 
       var startOfUrl = app.host;

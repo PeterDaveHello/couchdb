@@ -387,6 +387,41 @@ Secure Socket Level Options
       [ssl]
       verify_ssl_certificates = false
 
+  .. config:option:: fail_if_no_peer_cert :: Require presence of client certificate if certificate verification is enabled
+
+    Set to `true` to terminate the TLS/SSL handshake with a
+    `handshake_failure` alert message if the client does not send a
+    certificate. Only used if `verify_ssl_certificates` is `true`. If
+    set to `false` it will only fail if the client sends an invalid
+    certificate (an empty certificate is considered valid)::
+
+      [ssl]
+      fail_if_no_peer_cert = false
+
+  .. config:option:: secure_renegotiate :: Enable secure renegotiation
+
+    Set to `true` to reject renegotiation attempt that does not live up to RFC 5746::
+
+      [ssl]
+      secure_renegotiate = true
+
+  .. config:option:: ciphers :: Specify permitted server cipher list
+
+    Set to the cipher suites that should be supported which can be
+    specified in erlang format "{ecdhe_ecdsa,aes_128_cbc,sha256}" or
+    in OpenSSL format "ECDHE-ECDSA-AES128-SHA256".
+
+      [ssl]
+      ciphers = ["ECDHE-ECDSA-AES128-SHA256", "ECDHE-ECDSA-AES128-SHA"]
+
+  .. config:option:: tls_versions :: Specify permitted server SSL/TLS
+                     protocol versions
+
+    Set to a list of permitted SSL/TLS protocol versions::
+
+      [ssl]
+      tls_versions = [sslv3 | tlsv1 | 'tlsv1.1' | 'tlsv1.2']
+
 
 .. _cors:
 .. _config/cors:

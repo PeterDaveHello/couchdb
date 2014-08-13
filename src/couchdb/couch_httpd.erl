@@ -39,11 +39,17 @@ start_link(http) ->
     start_link(?MODULE, [{port, Port}]);
 start_link(https) ->
     Port = couch_config:get("ssl", "port", "6984"),
+    {ok, Ciphers} = couch_util:parse_term(couch_config:get("ssl", "ciphers", "nil")),
+    {ok, Versions} = couch_util:parse_term(couch_config:get("ssl", "tls_versions", "nil")),
+    {ok, SecureRenegotiate} = couch_util:parse_term(couch_config:get("ssl", "secure_renegotiate", "nil")),
     ServerOpts0 =
         [{cacertfile, couch_config:get("ssl", "cacert_file", nil)},
          {keyfile, couch_config:get("ssl", "key_file", nil)},
          {certfile, couch_config:get("ssl", "cert_file", nil)},
-         {password, couch_config:get("ssl", "password", nil)}],
+         {password, couch_config:get("ssl", "password", nil)},
+         {secure_renegotiate, SecureRenegotiate},
+         {versions, Versions},
+         {ciphers, Ciphers}],
 
     case (couch_util:get_value(keyfile, ServerOpts0) == nil orelse
         couch_util:get_value(certfile, ServerOpts0) == nil) of
@@ -60,8 +66,13 @@ start_link(https) ->
         "false" ->
             [];
         "true" ->
+            FailIfNoPeerCert = case couch_config:get("ssl", "fail_if_no_peer_cert", "false") of
+            "false" -> false;
+            "true" -> true
+            end,
             [{depth, list_to_integer(couch_config:get("ssl",
                 "ssl_certificate_max_depth", "1"))},
+             {fail_if_no_peer_cert, FailIfNoPeerCert},
              {verify, verify_peer}] ++
             case couch_config:get("ssl", "verify_fun", nil) of
                 nil -> [];
@@ -226,8 +237,6 @@ handle_request_int(MochiReq, DefaultFun,
     % removed, but URL quoting left intact
     RawUri = MochiReq:get(raw_path),
     {"/" ++ Path, _, _} = mochiweb_util:urlsplit_path(RawUri),
-
-    Headers = MochiReq:get(headers),
 
     % get requested path
     RequestedPath = case MochiReq:get_header_value("x-couchdb-vhost-path") of
