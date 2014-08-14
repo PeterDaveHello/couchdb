@@ -24,7 +24,7 @@ server() ->
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(3),
+    etap:plan(4),
     case (catch test()) of
         ok ->
             etap:end_tests();
