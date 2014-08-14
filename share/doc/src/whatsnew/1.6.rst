@@ -34,6 +34,20 @@ to update :config:option:`httpd/authentication_handlers` option with new value
 in case if you had used such handler.
 
 
+.. _release/1.6.1:
+
+Version 1.6.1
+=============
+
+bugfix release:
+
+* Hash admin passwords stored in ``local.ini`` on startup :commit:`d43f69d`.
+* Send a valid, empty, EventSource event for heartbeat instead of a newline,
+  to avoid clients getting stuck with a half-open TCP state. :commit:`95600b7`
+* Add experimental Content-Security-Policy-Support (CSP) for Fauxton to reduce
+  risk of XSS attacks. See (:ref:`config/csp`) for more information.
+  :commit:`3bcf664`
+
 .. _release/1.6.0:
 
 Version 1.6.0
